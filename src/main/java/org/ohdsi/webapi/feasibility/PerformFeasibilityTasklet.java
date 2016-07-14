@@ -74,7 +74,7 @@ public class PerformFeasibilityTasklet implements Tasklet {
   private StudyGenerationInfo findStudyGenerationInfoBySourceId(Collection<StudyGenerationInfo> infoList, Integer sourceId)
   {
     for (StudyGenerationInfo info : infoList) {
-      if (info.getId().getSourceId()== sourceId)
+      if (info.getId().getSourceId().equals(sourceId))
         return info;
     }
     return null;
@@ -83,7 +83,7 @@ public class PerformFeasibilityTasklet implements Tasklet {
   private CohortGenerationInfo findCohortGenerationInfoBySourceId(Collection<CohortGenerationInfo> infoList, Integer sourceId)
   {
     for (CohortGenerationInfo info : infoList) {
-      if (info.getId().getSourceId()== sourceId)
+      if (info.getId().getSourceId().equals(sourceId))
         return info;
     }
     return null;
