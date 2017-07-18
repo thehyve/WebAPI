@@ -68,7 +68,26 @@ public class CohortGenerationInfo implements Serializable {
   public CohortGenerationInfoId getId() {
     return id;
   }
-  
+
+  public boolean equals(Object o) {
+    if ( o instanceof CohortGenerationInfo ) {
+     CohortGenerationInfo other = (CohortGenerationInfo) o;
+     if ( id == null ) {
+       return ( id == other.getId() );
+     }
+     else {
+       return id.equals(other.getId() );
+     }
+    }
+    else {
+     return false;
+    }
+  }
+
+  public int hashCode() {
+    return id.hashCode();
+  }
+
   public Date getStartTime() {
     return startTime;
   }
