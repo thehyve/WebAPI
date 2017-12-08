@@ -202,6 +202,7 @@ public class PanaceaService extends AbstractDaoService {
                 final List<PanaceaSummaryLight> psll = new ArrayList<PanaceaSummaryLight>();
                 
                 for (final SourceInfo si : sourceCol) {
+									if (si.daimons.stream().filter(o -> o.getDaimonType().equals(SourceDaimon.DaimonType.Results)).findFirst().isPresent()) {
                     final Source source = getSourceRepository().findOne(si.sourceId);
                     final JdbcTemplate template = this.getSourceJdbcTemplate(source);
                     final PanaceaSummaryLight psl = PanaceaUtil.getStudySummaryLight(template,
@@ -209,6 +210,7 @@ public class PanaceaService extends AbstractDaoService {
                     if (psl != null) {
                         psll.add(psl);
                     }
+									}
                 }
                 
                 if (psll.size() > 0) {
