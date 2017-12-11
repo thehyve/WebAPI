@@ -1,8 +1,9 @@
 --from drug_era
-INSERT INTO @pnc_ptsq_ct (job_execution_id, study_id, person_id, source_id, concept_id, concept_name, idx_start_date, idx_end_date, duration_days)
+INSERT INTO @pnc_ptsq_ct (job_execution_id, study_id, person_id, source_id, concept_id, concept_name, idx_start_date, idx_end_date, duration_days, tx_seq)
 SELECT distinct @jobExecId as job_execution_id, @studyId AS study_id, myCohort.person_id AS person_id, @sourceId AS source_id, era.drug_concept_id,
 --  myConcept.concept_name, era.drug_era_start_date, era.drug_era_end_date, era.drug_era_end_date - era.drug_era_start_date + 1
   myConcept.concept_name, era.drug_era_start_date, era.drug_era_end_date, DATEDIFF(DAY, era.drug_era_start_date, era.drug_era_end_date) + 1
+  rank() OVER (PARTITION BY myCohort.person_id ORDER BY myCohort.person_id, era.drug_era_start_date, era.drug_era_end_date, era.drug_concept_id) real_tx_seq
 --FROM @results_schema.panacea_study study
 --INNER JOIN (SELECT DISTINCT COHORT_DEFINITION_ID COHORT_DEFINITION_ID, subject_id person_id, COHORT_START_DATE cohort_start_date, cohort_end_date cohort_end_date FROM @ohdsi_schema.cohort
 from (SELECT DISTINCT COHORT_DEFINITION_ID COHORT_DEFINITION_ID, subject_id person_id, COHORT_START_DATE cohort_start_date, cohort_end_date cohort_end_date FROM @ohdsi_schema.cohort
@@ -25,4 +26,4 @@ ON era.drug_concept_id = myConcept.concept_id
 --WHERE
 --    study.study_id = @studyId
 WHERE myCohort.COHORT_DEFINITION_ID = @COHORT_DEFINITION_ID
-ORDER BY person_id, drug_era_start_date, drug_era_end_date;
+--ORDER BY person_id, drug_era_start_date, drug_era_end_date;
