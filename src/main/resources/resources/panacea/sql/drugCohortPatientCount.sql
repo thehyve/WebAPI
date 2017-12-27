@@ -23,4 +23,4 @@ insert into @results_schema.pnc_tmp_pt_sq_ct
         and myCohort.subject_id = era.person_id
         and drug_concept_id in (1301025,1328165,1771162,19058274,918906,923645,933724,1310149,1125315)
         and era.drug_concept_id = myConcept.concept_id
-      order by person_id, drug_era_start_date) innerView;
+--      order by person_id, drug_era_start_date) innerView;
