@@ -18,6 +18,7 @@ package org.ohdsi.webapi.service;
 import java.io.ByteArrayOutputStream;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Date;
 import java.util.HashMap;
 import javax.transaction.Transactional;
 import javax.ws.rs.Consumes;
@@ -25,6 +26,7 @@ import javax.ws.rs.GET;
 import javax.ws.rs.POST;
 import javax.ws.rs.PUT;
 import javax.ws.rs.DELETE;
+import javax.ws.rs.DefaultValue;
 import javax.ws.rs.Path;
 import javax.ws.rs.PathParam;
 import javax.ws.rs.Produces;
@@ -40,6 +42,7 @@ import org.ohdsi.webapi.conceptset.ConceptSetGenerationInfoRepository;
 import org.ohdsi.webapi.conceptset.ConceptSetItem;
 import org.ohdsi.webapi.conceptset.ExportUtil;
 import org.ohdsi.webapi.evidence.NegativeControlRepository;
+import org.ohdsi.webapi.shiro.management.Security;
 import org.ohdsi.webapi.source.SourceInfo;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.dao.EmptyResultDataAccessException;
@@ -64,6 +67,9 @@ public class ConceptSetService extends AbstractDaoService {
 
     @Autowired
     private SourceService sourceService;
+
+    @Autowired
+    private Security security;
 
     @Path("{id}")
     @GET
@@ -132,7 +138,16 @@ public class ConceptSetService extends AbstractDaoService {
     @GET
     @Path("{id}/{name}/exists")
     @Produces(MediaType.APPLICATION_JSON)
-    public Collection<ConceptSet> getConceptSetExists(@PathParam("id") final int id, @PathParam("name") String name) {
+    public Response getConceptSetExistsDeprecated(@PathParam("id") final int id, @PathParam("name") String name) {
+        String warningMessage = "This method will be deprecated in the next release. Instead, please use the new REST endpoint: conceptset/exists?id={id}&name={name}";
+        Collection<ConceptSet> cs = getConceptSetRepository().conceptSetExists(id, name);
+        return Response.ok(cs).header("Warning: 299", warningMessage).build();
+    }
+		
+    @GET
+    @Path("/exists")
+    @Produces(MediaType.APPLICATION_JSON)
+    public Collection<ConceptSet> getConceptSetExists(@QueryParam("id") @DefaultValue("0") final int id, @QueryParam("name") String name) {
         return getConceptSetRepository().conceptSetExists(id, name);
     }
 
@@ -208,6 +223,8 @@ public class ConceptSetService extends AbstractDaoService {
     @Produces(MediaType.APPLICATION_JSON)
     public ConceptSet createConceptSet(ConceptSet conceptSet) {
         ConceptSet updated = new ConceptSet();
+        updated.setCreatedBy(security.getSubject());
+        updated.setCreatedDate(new Date());
         return updateConceptSet(updated, conceptSet);
     }
 
@@ -226,6 +243,8 @@ public class ConceptSetService extends AbstractDaoService {
 
     private ConceptSet updateConceptSet(ConceptSet dst, ConceptSet src) {
         dst.setName(src.getName());
+        dst.setModifiedDate(new Date());
+        dst.setModifiedBy(security.getSubject());
         
         dst = this.getConceptSetRepository().save(dst);
         return dst;
