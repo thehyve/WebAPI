@@ -25,15 +25,7 @@ import java.io.IOException;
 import java.io.StringWriter;
 import java.sql.ResultSet;
 import java.sql.SQLException;
-import java.util.ArrayList;
-import java.util.Calendar;
-import java.util.Collection;
-import java.util.Collections;
-import java.util.Date;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
+import java.util.*;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 import javax.persistence.EntityManager;
@@ -183,6 +175,40 @@ public class IRAnalysisService extends AbstractDaoService {
     return getSourceJdbcTemplate(source).query(psr.getSql(), psr.getSetter(), summaryMapper);
   }
 
+  private List<AnalysisReport> getAnalysisReportList(int id, Source source) {
+    List<AnalysisReport> reportList = new ArrayList<>();
+    for (AnalysisReport.Summary analysisSummary : getAnalysisSummaryList(id, source)) {
+      List<AnalysisReport.StrataStatistic> strataStats = getStrataStatistics(id, source, analysisSummary.targetId, analysisSummary.outcomeId);
+
+      AnalysisReport report = new AnalysisReport();
+      report.summary = analysisSummary;
+      report.stratifyStats = strataStats;
+      report.treemapData = getStrataTreemapData(id, analysisSummary.targetId, analysisSummary.outcomeId, strataStats.size(), source);
+
+      reportList.add(report);
+    }
+
+    return reportList;
+  }
+
+  private List<AnalysisReport> getAnalysisReportList(int id, Source source, int targetId) {
+    return new ArrayList<>(
+            CollectionUtils.select(
+                    getAnalysisReportList(id, source),
+                    report -> (report.summary.targetId == targetId)
+            )
+    );
+  }
+
+  private List<AnalysisReport> getAnalysisReportList(int id, Source source, int targetId, int outcomeId) {
+    return new ArrayList<>(
+      CollectionUtils.select(
+        getAnalysisReportList(id, source),
+        report -> ((report.summary.targetId == targetId) && (report.summary.outcomeId == outcomeId))
+      )
+    );
+  }
+
   private final RowMapper<AnalysisReport.StrataStatistic> strataRuleStatisticMapper = new RowMapper<AnalysisReport.StrataStatistic>() {
 
     @Override
@@ -205,6 +231,15 @@ public class IRAnalysisService extends AbstractDaoService {
     String resultsTableQualifier = source.getTableQualifier(SourceDaimon.DaimonType.Results);
     PreparedStatementRenderer psr = new PreparedStatementRenderer(source, STRATA_STATS_QUERY_TEMPLATE, "results_database_schema", resultsTableQualifier, "analysis_id", whitelist(id));
     return getSourceJdbcTemplate(source).query(psr.getSql(), psr.getSetter(), strataRuleStatisticMapper);
+  }
+
+  private List<AnalysisReport.StrataStatistic> getStrataStatistics(int id, Source source, int targetId, int outcomeId) {
+    return new ArrayList<>(
+      CollectionUtils.select(
+            getStrataStatistics(id, source),
+            summary -> ((summary.targetId == targetId) && (summary.outcomeId == outcomeId))
+      )
+    );
   }
 
   private int countSetBits(long n) {
@@ -493,30 +528,39 @@ public class IRAnalysisService extends AbstractDaoService {
   @Produces(MediaType.APPLICATION_JSON)
   @Transactional
   public AnalysisReport getAnalysisReport(@PathParam("id") final int id, @PathParam("sourceKey") final String sourceKey, @QueryParam("targetId") final int targetId, @QueryParam("outcomeId") final int outcomeId ) {
-
+    // TODO: implement with target and outcome id as PathParam, see /reports/{sourceKey}/target/{targetId}
+    //  @Path("/{id}/reports/{sourceKey}/target/{targetId}/outcome/{outcomeId}")
+    //  public AnalysisReport getAnalysisReport(@PathParam("id") final int id, @PathParam("sourceKey") final String sourceKey, @PathParam("targetId") final int targetId, @PathParam("outcomeId") final int outcomeId ) {
     Source source = this.getSourceRepository().findBySourceKey(sourceKey);
 
-    AnalysisReport.Summary summary = IterableUtils.find(getAnalysisSummaryList(id, source), new Predicate<AnalysisReport.Summary>() {
-      @Override
-      public boolean evaluate(AnalysisReport.Summary summary) {
-        return ((summary.targetId == targetId) && (summary.outcomeId == outcomeId));
-      }
-    });
-    
-    Collection<AnalysisReport.StrataStatistic> strataStats = CollectionUtils.select(getStrataStatistics(id, source), new Predicate<AnalysisReport.StrataStatistic>() {
-      @Override
-      public boolean evaluate(AnalysisReport.StrataStatistic summary) {
-        return ((summary.targetId == targetId) && (summary.outcomeId == outcomeId));
-      }
-    });
-    String treemapData = getStrataTreemapData(id, targetId, outcomeId, strataStats.size(), source);
+    List<AnalysisReport> reports = getAnalysisReportList(id, source, targetId, outcomeId);
+    if (reports.size() == 1) {
+      return reports.get(0);
+    } else if (reports.size() == 0) {
+      throw new RuntimeException("No analysis reports returned");
+    } else {
+      throw new RuntimeException("Two or more analysis reports returned");
+    }
+  }
 
-    AnalysisReport report = new AnalysisReport();
-    report.summary = summary;
-    report.stratifyStats = new ArrayList<>(strataStats);
-    report.treemapData = treemapData;
+  @GET
+  @Path("/{id}/reports/{sourceKey}")
+  @Produces(MediaType.APPLICATION_JSON)
+  @Transactional
+  public List<AnalysisReport> getAnalysisReport(@PathParam("id") final int id, @PathParam("sourceKey") final String sourceKey) {
+    Source source = this.getSourceRepository().findBySourceKey(sourceKey);
 
-    return report;
+    return getAnalysisReportList(id, source);
+  }
+
+  @GET
+  @Path("/{id}/reports/{sourceKey}/target/{targetId}")
+  @Produces(MediaType.APPLICATION_JSON)
+  @Transactional
+  public List<AnalysisReport> getAnalysisReport(@PathParam("id") final int id, @PathParam("sourceKey") final String sourceKey, @PathParam("targetId") final int targetId) {
+    Source source = this.getSourceRepository().findBySourceKey(sourceKey);
+
+    return getAnalysisReportList(id, source, targetId);
   }
 
   /**
