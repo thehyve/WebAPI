@@ -9,7 +9,7 @@
   <version>1.0.0-SNAPSHOT</version>
   <name>WebAPI</name>
   <properties>
-    <webapi.version>2.3.0</webapi.version>
+    <webapi.version>2.4.0</webapi.version>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
     <jersey.version>2.14</jersey.version>
     <!-- Spring Boot manages spring.version as well -->
@@ -42,8 +42,13 @@
     <!-- CDM properties -->
     <source.name>CDM_NAME</source.name>
     <cdm.version>5</cdm.version>
+    <!-- Person properties -->
+    <person.viewDates>false</person.viewDates>
 
-    <spring.batch.repository.tableprefix>${datasource.ohdsi.schema}.BATCH_</spring.batch.repository.tableprefix>
+    <!-- Heracles properties -->
+    <heracles.smallcellcount>5</heracles.smallcellcount>
+
+		<spring.batch.repository.tableprefix>${datasource.ohdsi.schema}.BATCH_</spring.batch.repository.tableprefix>
     <spring.batch.repository.isolationLevelForCreate>ISOLATION_READ_COMMITTED</spring.batch.repository.isolationLevelForCreate>
     <spring.profiles.active>default</spring.profiles.active>
 
@@ -81,7 +86,11 @@
     <use.single.connect.datasource.for.testing>true</use.single.connect.datasource.for.testing>
 
     <security.cors.enabled>true</security.cors.enabled>
-    
+    <security.maxLoginAttempts>3</security.maxLoginAttempts>
+    <security.duration.initial>10</security.duration.initial>
+    <security.duration.increment>10</security.duration.increment>
+
+
     <spring.datasource.hikari.connection-test-query>SELECT 1</spring.datasource.hikari.connection-test-query>
     <spring.datasource.hikari.maximum-pool-size>5</spring.datasource.hikari.maximum-pool-size>
     <spring.datasource.hikari.minimum-idle>1</spring.datasource.hikari.minimum-idle>
@@ -91,6 +100,17 @@
     <server.ssl.key-store></server.ssl.key-store>
     <server.ssl.key-store-password></server.ssl.key-store-password>
     <server.ssl.key-password></server.ssl.key-password>
+
+    <arachne.version>1.12.0-SNAPSHOT</arachne.version>
+    <jersey-media-multipart.version>2.25.1</jersey-media-multipart.version>
+    <execution.invalidation.maxage>4</execution.invalidation.maxage>
+    <execution.invalidation.period>10000</execution.invalidation.period>
+    <execution.status.period>10000</execution.status.period>
+		<executionengine.url>https://localhost:8888/api/v1/analyze</executionengine.url>
+		<executionengine.token>Basic YWRtaW5Ab2R5c3NldXNpbmMuY29tOnBhc3N3b3Jk</executionengine.token>
+		<executionengine.updateStatusCallback>http://localhost:8080/WebAPI/executionservice/callbacks/submission/{id}/status/update/{password}</executionengine.updateStatusCallback>
+		<executionengine.resultCallback>http://localhost:8080/WebAPI/executionservice/callbacks/submission/{id}/result/{password}</executionengine.resultCallback>
+    
   </properties>
   <build>
     <finalName>WebAPI</finalName>
@@ -212,6 +232,30 @@
         </executions>
         <configuration>
            <licence>cHJvamVjdHxvcmcub2hkc2kuV2ViQVBJfDIwMjAtMDMtMzF8dHJ1ZXwtMSNNQzBDRkNNQ2R2ZEhjbDg0Z2tONVI3bHlmQ2Y4SnNkYUFoVUFoMkdtOUVFdy9RelpLVzM1V2p6a2FsdzJZV009</licence>
+           <restModel>
+						<httpStatusCodes>
+							<httpStatusCode>
+									<httpCode>200</httpCode>
+									<document>always</document>
+									<defaultMessage>The service call has completed successfully.</defaultMessage>
+							</httpStatusCode>
+							<httpStatusCode>
+									<httpCode>401</httpCode>
+									<document>Authorization Exception</document>
+									<defaultMessage>The user is not authorized to use this service.</defaultMessage>
+							</httpStatusCode>
+							<httpStatusCode>
+									<httpCode>412</httpCode>
+									<document>put,post</document>
+									<defaultMessage>Invalid JSON/XML input.</defaultMessage>
+							</httpStatusCode>
+							<httpStatusCode>
+									<httpCode>500</httpCode>
+									<document>always</document>
+									<defaultMessage>The service call has not succeeded.</defaultMessage>
+							</httpStatusCode>
+						</httpStatusCodes>
+           </restModel>
         </configuration>
       </plugin>
     </plugins>
@@ -258,6 +302,32 @@
     <repository>
       <id>redshift</id>
       <url>http://redshift-maven-repository.s3-website-us-east-1.amazonaws.com/release</url>
+    </repository>
+    <repository>
+      <id>odysseus.community.snapshots</id>
+      <name>Odysseus community snapshots</name>
+      <releases>
+        <enabled>false</enabled>
+        <updatePolicy>always</updatePolicy>
+      </releases>
+      <snapshots>
+        <enabled>true</enabled>
+        <updatePolicy>always</updatePolicy>
+      </snapshots>
+      <url>http://repo.odysseusinc.com/artifactory/community-libs-snapshot-local</url>
+    </repository>
+    <repository>
+      <id>odysseus.community.releases</id>
+      <name>Odysseus community releases</name>
+      <releases>
+        <enabled>true</enabled>
+        <updatePolicy>always</updatePolicy>
+      </releases>
+      <snapshots>
+        <enabled>false</enabled>
+        <updatePolicy>always</updatePolicy>
+      </snapshots>
+      <url>http://repo.odysseusinc.com/artifactory/community-libs-release-local</url>
     </repository>
   </repositories>
 
@@ -340,7 +410,7 @@
     <dependency>
       <groupId>org.ohdsi.sql</groupId>
       <artifactId>SqlRender</artifactId>
-      <version>1.4.8</version>
+      <version>1.4.10</version>
     </dependency>
     <dependency>
       <groupId>commons-dbutils</groupId>
@@ -479,7 +549,7 @@
     <dependency>
       <groupId>org.ohdsi</groupId>
       <artifactId>circe</artifactId>
-      <version>1.4.0</version>
+      <version>1.5.0</version>
     </dependency>
     <dependency>
       <groupId>org.json</groupId>
@@ -508,6 +578,16 @@
     <dependency>
       <groupId>com.google.code.gson</groupId>
       <artifactId>gson</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>com.odysseusinc.arachne</groupId>
+      <artifactId>execution-engine-commons</artifactId>
+      <version>${arachne.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>org.glassfish.jersey.media</groupId>
+      <artifactId>jersey-media-multipart</artifactId>
+      <version>${jersey-media-multipart.version}</version>
     </dependency>
   </dependencies>
   <profiles>
@@ -570,6 +650,8 @@
         <security.db.datasource.password>${datasource.password}</security.db.datasource.password>
         <security.db.datasource.authenticationQuery>select password from ${security.db.datasource.schema}.user where \
               login = ?</security.db.datasource.authenticationQuery>
+        <security.db.datasource.authenticationQuery>select password from ${security.db.datasource.schema}.users_data where \
+          email = ?</security.db.datasource.authenticationQuery>
       </properties>
     </profile>
     <profile>
@@ -597,6 +679,44 @@
         <security.db.datasource.authenticationQuery>select password from ${security.db.datasource.schema}.user where \
           login = ?</security.db.datasource.authenticationQuery>
       </properties>
+    </profile>
+    <profile>
+      <id>webapi-netezza</id>
+      <properties>
+        <netezza.enabled>true</netezza.enabled>
+      </properties>
+      <dependencies>
+        <dependency>
+          <groupId>org.netezza</groupId>
+          <artifactId>nzjdbc</artifactId>
+          <version>1.0</version>
+        </dependency>
+      </dependencies>
+      <build>
+        <plugins>
+          <plugin>
+            <groupId>org.apache.maven.plugins</groupId>
+            <artifactId>maven-install-plugin</artifactId>
+            <version>2.5.2</version>
+            <executions>
+              <execution>
+                <id>netezza-jdbc</id>
+                <phase>initialize</phase>
+                <goals>
+                  <goal>install-file</goal>
+                </goals>
+                <configuration>
+                  <groupId>org.netezza</groupId>
+                  <artifactId>nzjdbc</artifactId>
+                  <version>1.0</version>
+                  <packaging>jar</packaging>
+                  <file>${basedir}/src/main/extras/netezza/nzjdbc.jar</file>
+                </configuration>
+              </execution>
+            </executions>
+          </plugin>
+        </plugins>
+      </build>
     </profile>
   </profiles>
 </project>
