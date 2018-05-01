@@ -33,7 +33,12 @@ import org.apache.shiro.web.util.WebUtils;
 import org.ohdsi.webapi.OidcConfCreator;
 import org.ohdsi.webapi.shiro.*;
 import org.ohdsi.webapi.shiro.Entities.RoleEntity;
+import org.ohdsi.webapi.shiro.Entities.UserEntity;
 import org.ohdsi.webapi.shiro.filters.KerberosAuthFilter;
+import org.ohdsi.webapi.shiro.lockout.DefaultLockoutPolicy;
+import org.ohdsi.webapi.shiro.lockout.ExponentLockoutStrategy;
+import org.ohdsi.webapi.shiro.lockout.LockoutPolicy;
+import org.ohdsi.webapi.shiro.lockout.LockoutStrategy;
 import org.ohdsi.webapi.shiro.realms.KerberosAuthRealm;
 import org.ohdsi.webapi.source.Source;
 import org.ohdsi.webapi.source.SourceRepository;
@@ -56,6 +61,7 @@ import waffle.shiro.negotiate.NegotiateAuthenticationStrategy;
  */
 public class AtlasSecurity extends Security {
   public static final String TOKEN_ATTRIBUTE = "TOKEN";
+  public static final String AUTH_FILTER_ATTRIBUTE = "AuthenticatingFilter";
   public static final String PERMISSIONS_ATTRIBUTE = "PERMISSIONS";
   private final Log log = LogFactory.getLog(getClass());
 
@@ -141,6 +147,7 @@ public class AtlasSecurity extends Security {
   private final Map<String, String> incidenceRatePermissionTemplates = new LinkedHashMap<>();
   private final Map<String, String> estimationPermissionTemplates = new LinkedHashMap<>();
   private final Map<String, String> plpPermissionTemplate = new LinkedHashMap<>();
+  private final Map<String, String> dataSourcePermissionTemplates = new LinkedHashMap<>();
 
   public AtlasSecurity() {
     this.defaultRoles.add("public");
@@ -171,6 +178,10 @@ public class AtlasSecurity extends Security {
     this.plpPermissionTemplate.put("plp:%s:delete", "Delete Population Level Prediction with ID=%s");
     this.plpPermissionTemplate.put("plp:%s:get", "Read Population Level Prediction with ID=%s");
     this.plpPermissionTemplate.put("plp:%s:copy:get", "Copy Population Level Prediction with ID=%s");
+
+    this.dataSourcePermissionTemplates.put("source:%s:put", "Edit Source with sourceKey=%s");
+    this.dataSourcePermissionTemplates.put("source:%s:get", "Read Source with sourceKey=%s");
+    this.dataSourcePermissionTemplates.put("source:%s:delete", "Delete Source with sourceKey=%s");
   }
 
   @Override
@@ -238,6 +249,10 @@ public class AtlasSecurity extends Security {
       // configuration
       .addProtectedRestPath("/source/refresh")
       .addProtectedRestPath("/source/priorityVocabulary")
+      .addRestPath("/source/sources")
+      .addProtectedRestPath("/source", "createPermissionsOnCreateSource")
+      .addProtectedRestPath("/source/*", "deletePermissionsOnDeleteSource")
+      .addProtectedRestPath("/source/details/*")
 
       // cohort analysis
       .addProtectedRestPath("/cohortanalysis")
@@ -250,7 +265,7 @@ public class AtlasSecurity extends Security {
       .addProtectedRestPath("/evidence/*")
 
       // execution service
-      .addProtectedRestPath("/execution_service/*")
+      .addProtectedRestPath("/executionservice/*")
 
       // feasibility
       .addProtectedRestPath("/feasibility")
@@ -264,6 +279,9 @@ public class AtlasSecurity extends Security {
 
       // data sources
       .addProtectedRestPath("/cdmresults/*")
+
+      // profiles
+      .addProtectedRestPath("/*/person/*")
 
       // not protected resources - all the rest
       .addRestPath("/**")
@@ -294,6 +312,8 @@ public class AtlasSecurity extends Security {
     filters.put("createPermissionsOnCreateEstimation", this.getCreatePermissionsOnCreateFilter(estimationPermissionTemplates, "analysisId"));
     filters.put("createPermissionsOnCreatePlp", this.getCreatePermissionsOnCreateFilter(plpPermissionTemplate, "analysisId"));
     filters.put("createPermissionsOnCopyPlp", this.getCreatePermissionsOnCopyFilter(plpPermissionTemplate, ".*plp/.*/copy", "analysisId"));
+    filters.put("createPermissionsOnCreateSource", this.getCreatePermissionsOnCreateFilter(dataSourcePermissionTemplates, "sourceKey"));
+    filters.put("deletePermissionsOnDeleteSource", this.getDeletePermissionsOnDeleteFilter(dataSourcePermissionTemplates));
     filters.put("cors", new CorsFilter());
     filters.put("skipFurtherFiltersIfNotPost", this.getSkipFurtherFiltersIfNotPostFilter());
     filters.put("skipFurtherFiltersIfNotPut", this.getSkipFurtherFiltersIfNotPutFilter());
@@ -399,14 +419,33 @@ public class AtlasSecurity extends Security {
     return authenticator;
   }
 
-  private void addSourceRole(String sourceKey) throws Exception {
-    String roleName = String.format("Source user (%s)", sourceKey);
+  private String getSourceRoleName(String sourceKey) {
+    return String.format("Source user (%s)", sourceKey);
+  }
+
+  @Override
+  public void addSourceRole(String sourceKey) throws Exception {
+    final String roleName = getSourceRoleName(sourceKey);
     if (this.authorizer.roleExists(roleName)) {
       return;
     }
 
     RoleEntity role = this.authorizer.addRole(roleName);
     this.authorizer.addPermissionsFromTemplate(role, this.sourcePermissionTemplates, sourceKey);
+  }
+
+  @Override
+  public void removeSourceRole(String sourceKey) throws Exception {
+    final String roleName = getSourceRoleName(sourceKey);
+    if (this.authorizer.roleExists(roleName)) {
+      RoleEntity role = this.authorizer.getRoleByName(roleName);
+      this.authorizer.removePermissionsFromTemplate(this.sourcePermissionTemplates, sourceKey);
+      Set<UserEntity> roleUsers = this.authorizer.getRoleUsers(role.getId());
+      for(UserEntity user : roleUsers) {
+        this.authorizer.removeUserFromRole(roleName, user.getLogin());
+      }
+      this.authorizer.removeRole(role.getId());
+    }
   }
 
   @PostConstruct

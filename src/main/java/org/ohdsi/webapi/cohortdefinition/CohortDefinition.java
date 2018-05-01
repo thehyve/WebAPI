@@ -15,22 +15,20 @@
 package org.ohdsi.webapi.cohortdefinition;
 
 import java.io.Serializable;
-import java.util.ArrayList;
-import java.util.Collection;
 import java.util.Date;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 import javax.persistence.Access;
 import javax.persistence.AccessType;
 import javax.persistence.CascadeType;
-import javax.persistence.CollectionTable;
 import javax.persistence.Column;
-import javax.persistence.ElementCollection;
 import javax.persistence.Entity;
 import javax.persistence.EnumType;
 import javax.persistence.Enumerated;
 import javax.persistence.FetchType;
 import javax.persistence.GeneratedValue;
+import javax.persistence.GenerationType;
 import javax.persistence.Id;
 import javax.persistence.JoinColumn;
 import javax.persistence.NamedAttributeNode;
@@ -38,8 +36,9 @@ import javax.persistence.NamedEntityGraph;
 import javax.persistence.NamedSubgraph;
 import javax.persistence.OneToMany;
 import javax.persistence.OneToOne;
-import javax.persistence.OrderColumn;
+import javax.persistence.SequenceGenerator;
 import javax.persistence.Table;
+import org.ohdsi.webapi.cohortanalysis.CohortAnalysisGenerationInfo;
 
 /**
  * JPA Entity for Cohort Definitions
@@ -57,7 +56,8 @@ public class CohortDefinition implements Serializable{
   private static final long serialVersionUID = 1L;
     
   @Id
-  @GeneratedValue
+  @SequenceGenerator(name = "cohort_definition_seq",sequenceName = "cohort_definition_sequence", allocationSize = 1)
+  @GeneratedValue(strategy = GenerationType.SEQUENCE, generator = "cohort_definition_seq")
   @Access(AccessType.PROPERTY) 
   private Integer id;
   
@@ -73,9 +73,12 @@ public class CohortDefinition implements Serializable{
   @JoinColumn(name="id")
   private CohortDefinitionDetails details;
 
-  @OneToMany(fetch= FetchType.LAZY, cascade = CascadeType.ALL, mappedBy = "cohortDefinition")
+  @OneToMany(fetch = FetchType.LAZY, cascade = CascadeType.ALL, mappedBy = "cohortDefinition")
   private Set<CohortGenerationInfo> generationInfoList;
-  
+
+	@OneToMany(fetch = FetchType.LAZY, cascade = CascadeType.ALL, mappedBy = "cohortDefinition")
+	private Set<CohortAnalysisGenerationInfo> cohortAnalysisGenerationInfoList = new HashSet<>();
+	
   @Column(name="created_by")
   private String createdBy;
   
@@ -176,4 +179,13 @@ public class CohortDefinition implements Serializable{
     this.generationInfoList = list;
     return this;
   }
+
+	public Set<CohortAnalysisGenerationInfo> getCohortAnalysisGenerationInfoList() {
+		return cohortAnalysisGenerationInfoList;
+	}
+
+	public void setCohortAnalysisGenerationInfoList(Set<CohortAnalysisGenerationInfo> cohortAnalysisGenerationInfoList) {
+		this.cohortAnalysisGenerationInfoList = cohortAnalysisGenerationInfoList;
+	}
+	
 }
