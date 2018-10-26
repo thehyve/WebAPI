@@ -30,7 +30,10 @@ public final class DataSourceDTOParser {
 
         Objects.requireNonNull(source, "Source should not be null");
 
-        ConnectionParams dto = ConnectionParamsParser.parse(getDbmsType(source), source.getSourceConnection());
+//        ConnectionParams dto = ConnectionParamsParser.parse(getDbmsType(source), source.getSourceConnection());
+        ConnectionParams dto = new ConnectionParams();
+        dto.setConnectionString(source.getSourceConnection());
+
         if (Objects.isNull(dto.getUser())) {
             dto.setUser(source.getUsername());
         }
