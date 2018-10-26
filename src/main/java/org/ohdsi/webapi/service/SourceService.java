@@ -1,11 +1,8 @@
 package org.ohdsi.webapi.service;
 
-import java.util.ArrayList;
-import java.util.Collection;
-import java.util.Collections;
-import java.util.Comparator;
-import java.util.List;
+import java.util.*;
 import java.util.stream.Collectors;
+import javax.annotation.PostConstruct;
 import javax.ws.rs.Consumes;
 import javax.ws.rs.DELETE;
 import javax.ws.rs.GET;
@@ -18,41 +15,105 @@ import javax.ws.rs.PathParam;
 import javax.ws.rs.Produces;
 import javax.ws.rs.core.MediaType;
 import javax.ws.rs.core.Response;
+
+import com.odysseusinc.logging.event.AddDataSourceEvent;
+import com.odysseusinc.logging.event.ChangeDataSourceEvent;
+import com.odysseusinc.logging.event.DeleteDataSourceEvent;
+import org.apache.commons.io.IOUtils;
+import org.apache.commons.lang3.StringUtils;
+import org.glassfish.jersey.media.multipart.FormDataContentDisposition;
+import org.glassfish.jersey.media.multipart.FormDataParam;
+import org.jasypt.encryption.pbe.PBEStringEncryptor;
+import org.jasypt.properties.PropertyValueEncryptionUtils;
+import org.ohdsi.sql.SqlTranslate;
 import org.ohdsi.webapi.shiro.management.Security;
-import org.ohdsi.webapi.source.Source;
-import org.ohdsi.webapi.source.SourceDaimon;
-import org.ohdsi.webapi.source.SourceDaimonRepository;
-import org.ohdsi.webapi.source.SourceDetails;
-import org.ohdsi.webapi.source.SourceInfo;
-import org.ohdsi.webapi.source.SourceRepository;
-import org.ohdsi.webapi.source.SourceRequest;
+import org.ohdsi.webapi.source.*;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.core.convert.support.GenericConversionService;
+import org.springframework.core.env.Environment;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.TransactionStatus;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionCallbackWithoutResult;
+import java.io.IOException;
+import java.io.InputStream;
 
 @Path("/source/")
 @Component
+@Transactional
 public class SourceService extends AbstractDaoService {
 
-  public static final String SECURE_MODE_ERROR = "This feautre requires the administrator to enable security for the application";
+    public static final String SECURE_MODE_ERROR = "This feature requires the administrator to enable security for the application";
+    private static final String IMPALA_DATASOURCE = "impala";
+    private static final String KRB_REALM = "KrbRealm";
+    private static final String KRB_FQDN = "KrbHostFQDN";
+
+  @Autowired
+  private JdbcTemplate jdbcTemplate;
+  @Autowired
+  private PBEStringEncryptor defaultStringEncryptor;
+  @Autowired
+  private Environment env;
+  @Autowired
+  private ApplicationEventPublisher publisher;
+  @Value("${datasource.ohdsi.schema}")
+  private String schema;
+
+  private boolean encryptorPasswordSet = false;
+
+  @PostConstruct
+  public void ensureSourceEncrypted(){
+    if (encryptorEnabled) {
+			String query = "SELECT source_id, username, password FROM ${schema}.source".replaceAll("\\$\\{schema\\}", schema);
+			String update = "UPDATE ${schema}.source SET username = ?, password = ? WHERE source_id = ?".replaceAll("\\$\\{schema\\}", schema);
+			getTransactionTemplateRequiresNew().execute(new TransactionCallbackWithoutResult() {
+				@Override
+				protected void doInTransactionWithoutResult(TransactionStatus transactionStatus) {
+					jdbcTemplate.query(query, rs -> {
+						int id = rs.getInt("source_id");
+						String username = rs.getString("username");
+						String password = rs.getString("password");
+						if (username != null && !PropertyValueEncryptionUtils.isEncryptedValue(username)){
+							username = "ENC(" + defaultStringEncryptor.encrypt(username) + ")";
+						}
+						if (password != null && !PropertyValueEncryptionUtils.isEncryptedValue(password)){
+							password = "ENC(" + defaultStringEncryptor.encrypt(password) + ")";
+						}
+						jdbcTemplate.update(update, username, password, id);
+					});
+				}
+			});
+		}
+	}
+
+  public Source findBySourceKey(final String sourceKey) {
+
+    return sourceRepository.findBySourceKey(sourceKey);
+  }
+
+  public Source findBySourceId(final Integer sourceId) {
+
+    return sourceRepository.findBySourceId(sourceId);
+  }
 
   public class SortByKey implements Comparator<SourceInfo>
   {
     private boolean isAscending;
-    
+
     public SortByKey(boolean ascending) {
-      isAscending = ascending;      
+      isAscending = ascending;
     }
-    
+
     public SortByKey() {
       this(true);
     }
-    
+
     public int compare(SourceInfo s1, SourceInfo s2) {
       return s1.sourceKey.compareTo(s2.sourceKey) * (isAscending ? 1 : -1);
-    }    
+    }
   }
   @Autowired
   private SourceRepository sourceRepository;
@@ -66,11 +127,14 @@ public class SourceService extends AbstractDaoService {
   @Autowired
   private Security securityManager;
 
-  @Value("${security.enabled}")
+  @Value("#{!'${security.provider}'.equals('DisabledSecurity')}")
   private boolean securityEnabled;
 
+  @Value("${jasypt.encryptor.enabled}")
+  private boolean encryptorEnabled;
+
   private static Collection<SourceInfo> cachedSources = null;
-  
+
   @Path("sources")
   @GET
   @Produces(MediaType.APPLICATION_JSON)
@@ -86,14 +150,15 @@ public class SourceService extends AbstractDaoService {
     }
     return cachedSources;
   }
-  
+
   @Path("refresh")
   @GET
-  @Produces(MediaType.APPLICATION_JSON)  
+  @Produces(MediaType.APPLICATION_JSON)
   public Collection<SourceInfo> refreshSources() {
     cachedSources = null;
+		this.ensureSourceEncrypted();
     return getSources();
-  }  
+  }
 
   @Path("priorityVocabulary")
   @GET
@@ -131,31 +196,35 @@ public class SourceService extends AbstractDaoService {
     if (!securityEnabled) {
       throw new NotAuthorizedException(SECURE_MODE_ERROR);
     }
-    return new SourceDetails(sourceRepository.findBySourceId(sourceId));
+    Source source = sourceRepository.findBySourceId(sourceId);
+    return new SourceDetails(source);
   }
 
   @Path("")
   @POST
-  @Consumes(MediaType.APPLICATION_JSON)
+  @Consumes(MediaType.MULTIPART_FORM_DATA)
   @Produces(MediaType.APPLICATION_JSON)
-  public SourceInfo createSource(SourceRequest request) throws Exception {
+  public SourceInfo createSource(@FormDataParam("keytab") InputStream file, @FormDataParam("keytab") FormDataContentDisposition fileDetail, @FormDataParam("source") SourceRequest request) throws Exception {
     if (!securityEnabled) {
       throw new NotAuthorizedException(SECURE_MODE_ERROR);
     }
     Source source = conversionService.convert(request, Source.class);
+    setImpalaKrbData(source, new Source(), file);
     Source saved = sourceRepository.save(source);
     String sourceKey = saved.getSourceKey();
     cachedSources = null;
     securityManager.addSourceRole(sourceKey);
-    return new SourceInfo(saved);
+      SourceInfo sourceInfo = new SourceInfo(saved);
+      publisher.publishEvent(new AddDataSourceEvent(this, source.getSourceId(), source.getSourceName()));
+      return sourceInfo;
   }
 
   @Path("{sourceId}")
   @PUT
-  @Consumes(MediaType.APPLICATION_JSON)
+  @Consumes(MediaType.MULTIPART_FORM_DATA)
   @Produces(MediaType.APPLICATION_JSON)
   @Transactional
-  public SourceInfo updateSource(@PathParam("sourceId") Integer sourceId, SourceRequest request) {
+  public SourceInfo updateSource(@PathParam("sourceId") Integer sourceId, @FormDataParam("keytab") InputStream file, @FormDataParam("keytab") FormDataContentDisposition fileDetail, @FormDataParam("source") SourceRequest request) throws IOException {
     if (!securityEnabled) {
       throw new NotAuthorizedException(SECURE_MODE_ERROR);
     }
@@ -164,16 +233,42 @@ public class SourceService extends AbstractDaoService {
     if (source != null) {
       updated.setSourceId(sourceId);
       updated.setSourceKey(source.getSourceKey());
+      if (StringUtils.isBlank(updated.getUsername()) ||
+              Objects.equals(updated.getUsername().trim(), Source.MASQUERADED_USERNAME)) {
+        updated.setUsername(source.getUsername());
+      }
+      if (StringUtils.isBlank(updated.getPassword()) ||
+              Objects.equals(updated.getPassword().trim(), Source.MASQUERADED_PASSWORD)) {
+        updated.setPassword(source.getPassword());
+      }
+      setImpalaKrbData(updated, source, file);
       List<SourceDaimon> removed = source.getDaimons().stream().filter(d -> !updated.getDaimons().contains(d))
               .collect(Collectors.toList());
       sourceDaimonRepository.delete(removed);
       Source result = sourceRepository.save(updated);
+        publisher.publishEvent(new ChangeDataSourceEvent(this, updated.getSourceId(), updated.getSourceName()));
       cachedSources = null;
       return new SourceInfo(result);
     } else {
       throw new NotFoundException();
     }
   }
+
+   private void setImpalaKrbData(Source updated, Source source, InputStream file) throws IOException {
+     if (IMPALA_DATASOURCE.equalsIgnoreCase(updated.getSourceDialect())) {
+         if (updated.getKeytabName() != null) {
+           if (!Objects.equals(updated.getKeytabName(), source.getKeytabName())) {
+             byte[] fileBytes = IOUtils.toByteArray(file);
+             updated.setKrbKeytab(fileBytes);
+           } else {
+             updated.setKrbKeytab(source.getKrbKeytab());
+           }
+           return;
+         }
+     }
+     updated.setKrbKeytab(null);
+     updated.setKeytabName(null);
+   }
 
   @Path("{sourceId}")
   @DELETE
@@ -186,6 +281,7 @@ public class SourceService extends AbstractDaoService {
     if (source != null) {
       final String sourceKey = source.getSourceKey();
       sourceRepository.delete(source);
+        publisher.publishEvent(new DeleteDataSourceEvent(this, sourceId, source.getSourceName()));
       cachedSources = null;
       securityManager.removeSourceRole(sourceKey);
       return Response.ok().build();
@@ -193,6 +289,18 @@ public class SourceService extends AbstractDaoService {
       throw new NotFoundException();
     }
   }
+
+  @Path("connection/{key}")
+  @GET
+  @Produces(MediaType.APPLICATION_JSON)
+  public SourceInfo checkConnection(@PathParam("key") final String sourceKey) {
+
+    final Source source = sourceRepository.findBySourceKey(sourceKey);
+    final JdbcTemplate jdbcTemplate = getSourceJdbcTemplate(source);
+    jdbcTemplate.execute(SqlTranslate.translateSql("select 1;", source.getSourceDialect()).replaceAll(";$", ""));
+    return source.getSourceInfo();
+  }
+
 
   @Path("{sourceKey}/daimons/{daimonType}/set-priority")
   @POST

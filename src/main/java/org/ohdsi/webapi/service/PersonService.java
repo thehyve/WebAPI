@@ -50,7 +50,7 @@ public class PersonService extends AbstractDaoService {
   @Value("${person.viewDates}")
   private Boolean viewDatesPermitted;
 	
-  @Value("${security.enabled}")
+  @Value("#{!'${security.provider}'.equals('DisabledSecurity')}")
   private boolean securityEnabled;
 
   @Path("{personId}")
@@ -138,6 +138,10 @@ public class PersonService extends AbstractDaoService {
       profile.records.stream().min(Comparator.comparing(c -> c.startDate))
         .map(r -> r.startDate.toLocalDateTime()).orElse(null));
 
+		if (cohortStartDate != null && profile.yearOfBirth > 0) {
+			profile.ageAtIndex = cohortStartDate.getYear() - profile.yearOfBirth;
+		}
+		
     for(PersonRecord record : profile.records){
       record.startDay = Math.toIntExact(ChronoUnit.DAYS.between(cohortStartDate, record.startDate.toLocalDateTime()));
       record.endDay = Objects.nonNull(record.endDate) ? Math.toIntExact(ChronoUnit.DAYS.between(cohortStartDate,

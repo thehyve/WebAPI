@@ -4,35 +4,24 @@ import static org.ohdsi.webapi.util.SecurityUtils.whitelist;
 
 import java.sql.ResultSet;
 import java.sql.SQLException;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.Collection;
-import java.util.HashMap;
-import java.util.HashSet;
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
+import java.util.*;
 
 import java.util.stream.Collectors;
 import javax.annotation.PostConstruct;
-import javax.ws.rs.Consumes;
-import javax.ws.rs.DefaultValue;
-import javax.ws.rs.GET;
-import javax.ws.rs.POST;
-import javax.ws.rs.Path;
-import javax.ws.rs.PathParam;
-import javax.ws.rs.Produces;
-import javax.ws.rs.QueryParam;
+import javax.ws.rs.*;
 import javax.ws.rs.core.MediaType;
 
 import org.apache.commons.collections.CollectionUtils;
 import org.apache.commons.lang3.math.NumberUtils;
 import org.ohdsi.circe.helper.ResourceHelper;
 import org.ohdsi.webapi.cohortanalysis.CohortAnalysis;
+import org.ohdsi.webapi.cohortanalysis.CohortAnalysisGenerationInfo;
 import org.ohdsi.webapi.cohortanalysis.CohortAnalysisTask;
 import org.ohdsi.webapi.cohortanalysis.CohortSummary;
+import org.ohdsi.webapi.cohortdefinition.CohortDefinitionRepository;
 import org.ohdsi.webapi.cohortresults.*;
 import org.ohdsi.webapi.cohortresults.mapper.AnalysisResultsMapper;
+import org.ohdsi.webapi.model.CohortDefinition;
 import org.ohdsi.webapi.model.results.Analysis;
 import org.ohdsi.webapi.model.results.AnalysisResults;
 import org.ohdsi.webapi.source.Source;
@@ -74,6 +63,9 @@ public class CohortResultsService extends AbstractDaoService {
 
   @Autowired
   private CohortDefinitionService cohortDefinitionService;
+
+  @Autowired
+  private CohortDefinitionRepository cohortDefinitionRepository;
 
   private ObjectMapper mapper = new ObjectMapper();
   private CohortResultsAnalysisRunner queryRunner = null;
@@ -464,6 +456,60 @@ public class CohortResultsService extends AbstractDaoService {
           }
         }
     );
+  }
+
+  class GenerationInfoDTO {
+    private String sourceKey;
+    private Integer analysisId;
+    private Integer progress;
+
+    public GenerationInfoDTO() {
+    }
+
+    public GenerationInfoDTO(String sourceKey, Integer analysisId, Integer progress) {
+      this.sourceKey = sourceKey;
+      this.analysisId = analysisId;
+      this.progress = progress;
+    }
+
+    public String getSourceKey() {
+      return sourceKey;
+    }
+
+    public void setSourceKey(String sourceKey) {
+      this.sourceKey = sourceKey;
+    }
+
+    public Integer getAnalysisId() {
+      return analysisId;
+    }
+
+    public void setAnalysisId(Integer analysisId) {
+      this.analysisId = analysisId;
+    }
+
+    public Integer getProgress() {
+      return progress;
+    }
+
+    public void setProgress(Integer progress) {
+      this.progress = progress;
+    }
+  }
+
+  @GET
+  @Path("{sourceKey}/{id}/info")
+  @Produces(MediaType.APPLICATION_JSON)
+  public GenerationInfoDTO getAnalysisProgress(@PathParam("sourceKey") String sourceKey, @PathParam("id") Integer id) {
+
+    return getTransactionTemplateRequiresNew().execute(status -> {
+      org.ohdsi.webapi.cohortdefinition.CohortDefinition def = cohortDefinitionRepository.findOne(id);
+      Source source = getSourceRepository().findBySourceKey(sourceKey);
+      return def.getCohortAnalysisGenerationInfoList().stream()
+              .filter(cd -> Objects.equals(cd.getSourceId(), source.getSourceId()))
+              .findFirst().map(gen -> new GenerationInfoDTO(sourceKey, id, gen.getProgress()))
+              .<RuntimeException>orElseThrow(NotFoundException::new);
+    });
   }
 
   protected PreparedStatementRenderer prepareGetCompletedAnalysis(String id, int sourceId) {
@@ -1327,7 +1373,7 @@ public class CohortResultsService extends AbstractDaoService {
     Source source = getSourceRepository().findBySourceKey(sourceKey);
     String sqlPath = "/resources/cohortresults/sql/raw/getMembers.sql";
     String tqName = "tableQualifier";
-    String tqValue = source.getTableQualifier(SourceDaimon.DaimonType.CDM);
+    String tqValue = source.getTableQualifier(SourceDaimon.DaimonType.Results);
     String[] names = new String[]{"cohortDefinitionId", "min", "max"};
     Object[] values = new Object[]{whitelist(id), whitelist(min), whitelist(max)};
     PreparedStatementRenderer psr = new PreparedStatementRenderer(source, sqlPath, tqName, tqValue, names, values, SessionUtils.sessionId());
@@ -1780,6 +1826,18 @@ public class CohortResultsService extends AbstractDaoService {
 		Source source = getSourceRepository().findBySourceKey(sourceKey);
 		HealthcareExposureReport exposureReport = queryRunner.getHealthcareExposureReport(getSourceJdbcTemplate(source), id, window, periodType, source);
 		return exposureReport;
+	}
+
+	@GET
+	@Path("{sourceKey}/{id}/healthcareutilization/periods/{window}")
+	@Produces(MediaType.APPLICATION_JSON)
+	public List<String> getHealthcareUtilizationPeriods(
+						@PathParam("id") final int id
+					, @PathParam("sourceKey") final String sourceKey
+					, @PathParam("window") final WindowType window) {
+		final Source source = getSourceRepository().findBySourceKey(sourceKey);
+		final List<String> periodTypes = queryRunner.getHealthcarePeriodTypes(getSourceJdbcTemplate(source), id, window, source);
+		return periodTypes;
 	}
 	
 	@GET

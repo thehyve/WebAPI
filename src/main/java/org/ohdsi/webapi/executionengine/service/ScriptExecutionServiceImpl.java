@@ -1,23 +1,11 @@
 package org.ohdsi.webapi.executionengine.service;
 
-import com.odysseusinc.arachne.execution_engine_common.api.v1.dto.AnalysisRequestDTO;
-import com.odysseusinc.arachne.execution_engine_common.api.v1.dto.AnalysisRequestStatusDTO;
-import com.odysseusinc.arachne.execution_engine_common.api.v1.dto.AnalysisRequestTypeDTO;
-import com.odysseusinc.arachne.execution_engine_common.api.v1.dto.DataSourceUnsecuredDTO;
-import java.security.KeyManagementException;
-import java.security.NoSuchAlgorithmException;
-import java.util.ArrayList;
-import java.util.Date;
-import java.util.List;
-import javax.net.ssl.HttpsURLConnection;
-import javax.ws.rs.NotFoundException;
-import javax.ws.rs.client.Client;
-import javax.ws.rs.client.Entity;
-import javax.ws.rs.client.WebTarget;
-import javax.ws.rs.core.MediaType;
+import com.odysseusinc.arachne.commons.types.DBMSType;
+import com.odysseusinc.arachne.execution_engine_common.api.v1.dto.*;
+import com.odysseusinc.arachne.execution_engine_common.util.ConnectionParams;
+import jersey.repackaged.com.google.common.collect.ImmutableList;
 import jersey.repackaged.com.google.common.collect.ImmutableMap;
 import org.apache.commons.io.IOUtils;
-import org.apache.commons.lang3.StringUtils;
 import org.apache.commons.lang3.text.StrSubstitutor;
 import org.apache.commons.lang3.time.DateUtils;
 import org.apache.commons.logging.Log;
@@ -25,6 +13,7 @@ import org.apache.commons.logging.LogFactory;
 import org.glassfish.jersey.media.multipart.FormDataBodyPart;
 import org.glassfish.jersey.media.multipart.MultiPart;
 import org.glassfish.jersey.media.multipart.file.StreamDataBodyPart;
+import org.ohdsi.webapi.KerberosUtils;
 import org.ohdsi.webapi.cohortcomparison.ComparativeCohortAnalysis;
 import org.ohdsi.webapi.cohortcomparison.ComparativeCohortAnalysisExecutionRepository;
 import org.ohdsi.webapi.cohortcomparison.ComparativeCohortAnalysisRepository;
@@ -39,9 +28,9 @@ import org.ohdsi.webapi.executionengine.util.StringGenerationUtil;
 import org.ohdsi.webapi.prediction.PatientLevelPredictionAnalysis;
 import org.ohdsi.webapi.prediction.PatientLevelPredictionAnalysisRepository;
 import org.ohdsi.webapi.service.HttpClient;
+import org.ohdsi.webapi.service.SourceService;
 import org.ohdsi.webapi.source.Source;
 import org.ohdsi.webapi.source.SourceDaimon;
-import org.ohdsi.webapi.source.SourceRepository;
 import org.ohdsi.webapi.util.DataSourceDTOParser;
 import org.springframework.batch.core.JobExecution;
 import org.springframework.batch.core.explore.JobExplorer;
@@ -49,6 +38,17 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
+
+import javax.net.ssl.HttpsURLConnection;
+import javax.ws.rs.NotFoundException;
+import javax.ws.rs.client.Entity;
+import javax.ws.rs.client.WebTarget;
+import javax.ws.rs.core.MediaType;
+import java.security.KeyManagementException;
+import java.security.NoSuchAlgorithmException;
+import java.util.ArrayList;
+import java.util.Date;
+import java.util.List;
 
 @Service
 class ScriptExecutionServiceImpl implements ScriptExecutionService {
@@ -74,9 +74,10 @@ class ScriptExecutionServiceImpl implements ScriptExecutionService {
     @Autowired
     private OutputFileRepository outputFileRepository;
 
+    private List<DBMSType> DBMS_REQUIRE_DB = ImmutableList.of(DBMSType.POSTGRESQL, DBMSType.REDSHIFT);
 
     @Autowired
-    private SourceRepository sourceRepository;
+    private SourceService sourceService;
     @Autowired
     private InputFileRepository inputFileRepository;
 
@@ -100,23 +101,24 @@ class ScriptExecutionServiceImpl implements ScriptExecutionService {
     }
 
     @Override
-    public Long runScript(ExecutionRequestDTO dto) throws Exception {
+    public Long runScript(ExecutionRequestDTO dto, int analysisExecutionId) {
 
-        Source source = sourceRepository.findBySourceKey(dto.sourceKey);
+        Source source = findSourceByKey(dto.sourceKey);
+
         final String cdmTableQualifier = source.getTableQualifier(SourceDaimon.DaimonType.CDM);
         final String resultsTableQualifier = source.getTableQualifier(SourceDaimon.DaimonType.Results);
         String vocabularyTableQualifier = source.getTableQualifierOrNull(SourceDaimon.DaimonType.Vocabulary);
         if (vocabularyTableQualifier == null) {
             vocabularyTableQualifier = cdmTableQualifier;
         }
-        final String password = StringGenerationUtil.generateRandomString();
 
-        AnalysisExecution execution = makeAnalysisExecution(dto, source, password);
+        AnalysisExecution execution = analysisExecutionRepository.findOne(analysisExecutionId);
 
         String name = getAnalysisName(dto);
 
         //replace var in R-script
-        final String script = processTemplate(dto, cdmTableQualifier, resultsTableQualifier, vocabularyTableQualifier, source);
+        ConnectionParams connectionParams = DataSourceDTOParser.parse(source);
+        final String script = processTemplate(dto, cdmTableQualifier, resultsTableQualifier, vocabularyTableQualifier, source.getSourceDialect(), connectionParams);
         AnalysisFile inputFile = new AnalysisFile();
         inputFile.setAnalysisExecution(execution);
         inputFile.setContents(script.getBytes());
@@ -125,7 +127,7 @@ class ScriptExecutionServiceImpl implements ScriptExecutionService {
 
         final String analysisExecutionUrl = "/analyze";
         WebTarget webTarget = client.target(executionEngineURL + analysisExecutionUrl);
-        MultiPart multiPart = buildRequest(buildAnalysisRequest(execution, source, password), script);
+        MultiPart multiPart = buildRequest(buildAnalysisRequest(execution, source, execution.getUpdatePassword(), connectionParams), script);
         try {
                 webTarget
                     .request(MediaType.MULTIPART_FORM_DATA_TYPE)
@@ -139,6 +141,12 @@ class ScriptExecutionServiceImpl implements ScriptExecutionService {
             analysisExecutionRepository.save(execution);
         }
         return execution.getId().longValue();
+    }
+
+    @Override
+    public Source findSourceByKey(final String key) {
+
+        return sourceService.findBySourceKey(key);
     }
 
     private MultiPart buildRequest(AnalysisRequestDTO analysisRequestDTO, String script) {
@@ -157,13 +165,16 @@ class ScriptExecutionServiceImpl implements ScriptExecutionService {
         return multiPart;
     }
 
-    private AnalysisRequestDTO buildAnalysisRequest(AnalysisExecution execution, Source source, String password){
+    private AnalysisRequestDTO buildAnalysisRequest(AnalysisExecution execution, Source source, String password, ConnectionParams connectionParams) {
         AnalysisRequestDTO analysisRequestDTO = new AnalysisRequestDTO();
         Long executionId = execution.getId().longValue();
         analysisRequestDTO.setId(executionId);
-        analysisRequestDTO.setDataSource(makeDataSourceDTO(source));
+        analysisRequestDTO.setDataSource(makeDataSourceDTO(source, connectionParams));
         analysisRequestDTO.setCallbackPassword(password);
         analysisRequestDTO.setRequested(new Date());
+        if (IMPALA_DATASOURCE.equalsIgnoreCase(source.getSourceDialect()) && AuthMethod.KERBEROS == connectionParams.getAuthMethod()) {
+            KerberosUtils.setKerberosParams(source, connectionParams, analysisRequestDTO.getDataSource());
+        }
         String executableFileName = StringGenerationUtil.generateFileName(AnalysisRequestTypeDTO.R.name().toLowerCase());
         analysisRequestDTO.setExecutableFileName(executableFileName);
         analysisRequestDTO.setResultCallback(
@@ -181,7 +192,8 @@ class ScriptExecutionServiceImpl implements ScriptExecutionService {
         return analysisRequestDTO;
     }
 
-    private AnalysisExecution makeAnalysisExecution(ExecutionRequestDTO dto, Source source, String password) {
+    @Override
+    public AnalysisExecution createAnalysisExecution(ExecutionRequestDTO dto, Source source, String password) {
 
         AnalysisExecution execution = new AnalysisExecution();
         execution.setAnalysisId(dto.cohortId);
@@ -192,7 +204,7 @@ class ScriptExecutionServiceImpl implements ScriptExecutionService {
         execution.setExecutionStatus(AnalysisExecution.Status.STARTED);
         execution.setUserId(0); //Looks strange
         execution.setUpdatePassword(password);
-        analysisExecutionRepository.save(execution);
+        analysisExecutionRepository.saveAndFlush(execution);
         return execution;
     }
 
@@ -255,18 +267,24 @@ class ScriptExecutionServiceImpl implements ScriptExecutionService {
     private String processTemplate(ExecutionRequestDTO requestDTO,
                                    String cdmTable, String resultsTable,
                                    String vocabularyTable,
-                                   Source source) {
+                                   String sourceDialect,
+                                   ConnectionParams connectionParams) {
 
-        ConnectionParams connectionParams = getConnectionParams(source.getSourceConnection());
+        String serverName;
+        if (DBMS_REQUIRE_DB.stream().anyMatch(dbms -> dbms.getOhdsiDB().equalsIgnoreCase(sourceDialect))) {
+            serverName = connectionParams.getServer() + "/" + connectionParams.getSchema();
+        } else {
+            serverName = connectionParams.getServer();
+        }
 
         String temp = requestDTO.template
                 .replace("dbms = \"postgresql\"", "dbms = \"" + connectionParams.getDbms() + "\"")
-                .replace("server = \"localhost/ohdsi\"", "server = \"" + connectionParams.getServer() + "\"")
+                .replace("server = \"localhost/ohdsi\"", "server = \"" + serverName + "\"")
                 .replace("user = \"joe\"", "user = \"" + connectionParams.getUser() + "\"")
                 .replace("my_cdm_data", cdmTable)
                 .replace("my_vocabulary_data", vocabularyTable)
                 .replace("my_results", resultsTable)
-                .replace("exposure_database_schema", cdmTable)
+                .replace("exposure_database_schema", resultsTable)
                 .replace("outcome_database_schema", resultsTable)
                 .replace("exposure_table", "cohort")
                 .replace("outcome_table", "cohort")
@@ -278,7 +296,7 @@ class ScriptExecutionServiceImpl implements ScriptExecutionService {
                         "cdmVersion <- \"" + requestDTO.cdmVersion + "\"")
                 .replace("<insert your " + "directory here>",
                         requestDTO.workFolder);
-        if (IMPALA_DATASOURCE.equalsIgnoreCase(source.getSourceDialect())){
+        if (IMPALA_DATASOURCE.equalsIgnoreCase(sourceDialect)) {
             temp = temp.replace("password = \"supersecret\"", "password = \""
                     + connectionParams.getPassword() + "\", "
                     + "schema=\"" + connectionParams.getSchema() + "\", "
@@ -300,128 +318,11 @@ class ScriptExecutionServiceImpl implements ScriptExecutionService {
                 .replace("false", "FALSE");
     }
 
-    private ConnectionParams getConnectionParams(final String sourceConnection) {
+    private DataSourceUnsecuredDTO makeDataSourceDTO(Source source, ConnectionParams connectionParams) {
 
-        ConnectionParams connectionParams = new ConnectionParams();
-        String tmp = sourceConnection;
-        tmp = tmp.substring(tmp.indexOf(":") + 1);
-        connectionParams.setDbms(tmp.substring(0, tmp.indexOf(":")));
-        tmp = tmp.substring(tmp.indexOf(":") + 3);
-        String serverPortDB = tmp.indexOf("?") > 0 ? tmp.substring(0, tmp.indexOf("?")) :
-                tmp.indexOf(";") > 0 ? tmp.substring(0, tmp.indexOf(";")) : tmp;
-        String port = serverPortDB.substring(serverPortDB.indexOf(":") + 1, serverPortDB.indexOf("/"));
-
-        if (StringUtils.isNotBlank(port)) {
-            connectionParams.setPort(port);
-        }
-
-        if (IMPALA_DATASOURCE.equalsIgnoreCase(connectionParams.getDbms())){
-            int colonIndex = serverPortDB.indexOf(":");
-            connectionParams.setServer(serverPortDB.substring(0, colonIndex));
-            connectionParams.setSchema(serverPortDB.substring(serverPortDB.indexOf("/") + 1));
-            connectionParams.setExtraSettings(tmp.substring(tmp.indexOf(";") + 1));
-        } else {
-            connectionParams.setServer(serverPortDB.substring(0, serverPortDB.indexOf(":")) + serverPortDB.substring(
-                    serverPortDB.indexOf("/")));
-        }
-        tmp = tmp.substring(tmp.indexOf("?") + 1);
-        String[] split = tmp.split("&");
-        for (String s : split) {
-            if (s.contains("user")) {
-                connectionParams.setUser(s.substring(s.indexOf("=") + 1));
-            }
-            if (s.contains("password")) {
-                connectionParams.setPassword(s.substring(s.indexOf("=") + 1));
-            }
-        }
-
-        return connectionParams;
-    }
-
-    private DataSourceUnsecuredDTO makeDataSourceDTO(Source source) {
-
-        DataSourceUnsecuredDTO dto = DataSourceDTOParser.parseDTO(source);
+        DataSourceUnsecuredDTO dto = DataSourceDTOParser.parseDTO(source, connectionParams);
         dto.setCdmSchema(source.getTableQualifier(SourceDaimon.DaimonType.CDM));
         return dto;
     }
 
-    private class ConnectionParams {
-        private String dbms;
-        private String server;
-        private String user;
-        private String password;
-        private String port;
-        private String schema;
-        private String extraSettings;
-
-        String getDbms() {
-
-            return dbms;
-        }
-
-        void setDbms(String dbms) {
-
-            this.dbms = dbms;
-        }
-
-        String getServer() {
-
-            return server;
-        }
-
-        void setServer(String server) {
-
-            this.server = server;
-        }
-
-        String getUser() {
-
-            return user;
-        }
-
-        void setUser(String user) {
-
-            this.user = user;
-        }
-
-        String getPassword() {
-
-            return password;
-        }
-
-        void setPassword(String password) {
-
-            this.password = password;
-        }
-
-        public String getPort() {
-
-            return port;
-        }
-
-        public void setPort(String port) {
-
-            this.port = port;
-        }
-
-        public String getSchema() {
-
-            return schema;
-        }
-
-        public void setSchema(String schema) {
-
-            this.schema = schema;
-        }
-
-        public String getExtraSettings() {
-
-            return extraSettings;
-        }
-
-        public void setExtraSettings(String extraSettings) {
-
-            this.extraSettings = extraSettings;
-        }
-    }
 }

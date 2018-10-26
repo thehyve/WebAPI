@@ -5,82 +5,80 @@
  */
 package org.ohdsi.webapi.service;
 
+import static org.ohdsi.webapi.Constants.GENERATE_COHORT;
+import static org.ohdsi.webapi.Constants.Params.CDM_DATABASE_SCHEMA;
+import static org.ohdsi.webapi.Constants.Params.COHORT_DEFINITION_ID;
+import static org.ohdsi.webapi.Constants.Params.GENERATE_STATS;
+import static org.ohdsi.webapi.Constants.Params.JOB_NAME;
+import static org.ohdsi.webapi.Constants.Params.RESULTS_DATABASE_SCHEMA;
+import static org.ohdsi.webapi.Constants.Params.SOURCE_ID;
+import static org.ohdsi.webapi.Constants.Params.TARGET_DATABASE_SCHEMA;
+import static org.ohdsi.webapi.Constants.Params.TARGET_DIALECT;
+import static org.ohdsi.webapi.Constants.Params.TARGET_TABLE;
+import static org.ohdsi.webapi.Constants.Params.VOCABULARY_DATABASE_SCHEMA;
 import static org.ohdsi.webapi.util.SecurityUtils.whitelist;
 
 import com.fasterxml.jackson.annotation.JsonFormat;
 import com.fasterxml.jackson.annotation.JsonProperty;
+import java.io.IOException;
 import java.math.BigDecimal;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.math.RoundingMode;
 import java.io.ByteArrayOutputStream;
 import java.sql.ResultSet;
 import java.sql.SQLException;
-import java.util.ArrayList;
-import java.util.Calendar;
-import java.util.Collections;
-import java.util.Date;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
+import java.util.*;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
+import java.util.stream.StreamSupport;
+import javax.annotation.PostConstruct;
 import javax.persistence.EntityManager;
 import javax.persistence.PersistenceContext;
 
 import javax.servlet.ServletContext;
 import javax.transaction.Transactional;
-import javax.ws.rs.Consumes;
-import javax.ws.rs.DELETE;
-import javax.ws.rs.GET;
-import javax.ws.rs.POST;
-import javax.ws.rs.PUT;
-import javax.ws.rs.Path;
-import javax.ws.rs.PathParam;
-import javax.ws.rs.Produces;
-import javax.ws.rs.QueryParam;
+import javax.ws.rs.*;
 import javax.ws.rs.core.Context;
 import javax.ws.rs.core.MediaType;
 import org.apache.commons.lang3.StringUtils;
-import org.ohdsi.sql.SqlTranslate;
+import org.ohdsi.circe.check.Checker;
+import org.ohdsi.circe.check.Warning;
 import javax.ws.rs.core.Response;
+import org.ohdsi.circe.check.WarningSeverity;
+import org.ohdsi.circe.check.warnings.DefaultWarning;
 import org.ohdsi.sql.SqlRender;
 
 import org.ohdsi.circe.cohortdefinition.CohortExpression;
 import org.ohdsi.circe.cohortdefinition.CohortExpressionQueryBuilder;
 import org.ohdsi.circe.cohortdefinition.ConceptSet;
-import org.ohdsi.webapi.cohortdefinition.CohortDefinition;
-import org.ohdsi.webapi.cohortdefinition.CohortDefinitionDetails;
-import org.ohdsi.webapi.cohortdefinition.CohortDefinitionRepository;
-import org.ohdsi.webapi.cohortdefinition.CohortGenerationInfo;
-import org.ohdsi.webapi.cohortdefinition.ExpressionType;
-import org.ohdsi.webapi.cohortdefinition.GenerateCohortTasklet;
+import org.ohdsi.webapi.cohortdefinition.*;
 import org.ohdsi.webapi.GenerationStatus;
-import org.ohdsi.webapi.cohortdefinition.CleanupCohortTasklet;
-import org.ohdsi.webapi.cohortdefinition.GenerationJobExecutionListener;
-import org.ohdsi.webapi.cohortdefinition.InclusionRuleReport;
 import org.ohdsi.webapi.cohortfeatures.GenerateCohortFeaturesTasklet;
 import org.ohdsi.webapi.conceptset.ConceptSetExport;
 import org.ohdsi.webapi.conceptset.ExportUtil;
 import org.ohdsi.webapi.job.JobExecutionResource;
 import org.ohdsi.webapi.job.JobTemplate;
+import org.ohdsi.webapi.shiro.Entities.UserEntity;
+import org.ohdsi.webapi.shiro.Entities.UserRepository;
 import org.ohdsi.webapi.shiro.management.Security;
 import org.ohdsi.webapi.source.Source;
 import org.ohdsi.webapi.source.SourceDaimon;
 import org.ohdsi.webapi.util.PreparedStatementRenderer;
 import org.ohdsi.webapi.util.SessionUtils;
 import org.ohdsi.webapi.source.SourceInfo;
-import org.springframework.batch.core.Job;
-import org.springframework.batch.core.JobParameters;
-import org.springframework.batch.core.JobParametersBuilder;
-import org.springframework.batch.core.Step;
+import org.ohdsi.webapi.util.UserUtils;
+import org.springframework.batch.core.*;
 import org.springframework.batch.core.configuration.annotation.JobBuilderFactory;
 import org.springframework.batch.core.configuration.annotation.StepBuilderFactory;
+import org.springframework.batch.core.explore.JobExplorer;
 import org.springframework.batch.core.job.builder.SimpleJobBuilder;
+import org.springframework.batch.core.launch.JobExecutionNotRunningException;
+import org.springframework.batch.core.launch.JobOperator;
+import org.springframework.batch.core.launch.NoSuchJobExecutionException;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.jdbc.core.RowMapper;
 import org.springframework.stereotype.Component;
-import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.TransactionStatus;
-import org.springframework.transaction.support.DefaultTransactionDefinition;
 import org.springframework.transaction.support.TransactionCallbackWithoutResult;
 
 /**
@@ -113,6 +111,18 @@ public class CohortDefinitionService extends AbstractDaoService {
     
   @Autowired
   private JobTemplate jobTemplate;
+
+  @Autowired
+  private JobExplorer jobExplorer;
+
+  @Autowired
+  private JobOperator jobOperator;
+
+  @Autowired
+  private UserRepository userRepository;
+
+  @Autowired
+  private CohortGenerationService cohortGenerationService;
 
 	@PersistenceContext
 	protected EntityManager entityManager;
@@ -162,7 +172,7 @@ public class CohortDefinitionService extends AbstractDaoService {
       resultItem[1] = rs.getLong("person_count");
       return resultItem;
     }
-  };  
+  };
 
   private CohortGenerationInfo findBySourceId(Set<CohortGenerationInfo> infoList, Integer sourceId) {
     for (CohortGenerationInfo info : infoList) {
@@ -173,25 +183,29 @@ public class CohortDefinitionService extends AbstractDaoService {
     return null;
   }
   
-  private InclusionRuleReport.Summary getInclusionRuleReportSummary(int id, Source source) {
+  private InclusionRuleReport.Summary getInclusionRuleReportSummary(int id, Source source, int modeId) {
 
-    String sql = "select base_count, final_count from @tableQualifier.cohort_summary_stats where cohort_definition_id = @id";
+    String sql = "select base_count, final_count from @tableQualifier.cohort_summary_stats where cohort_definition_id = @id and mode_id = @modeId";
     String tqName = "tableQualifier";
     String tqValue = source.getTableQualifier(SourceDaimon.DaimonType.Results);
-    PreparedStatementRenderer psr = new PreparedStatementRenderer(source, sql, tqName, tqValue, "id", whitelist(id), SessionUtils.sessionId());
+		String[] varNames = {"id", "modeId"};
+		Object[] varValues = {whitelist(id), whitelist(modeId)};
+    PreparedStatementRenderer psr = new PreparedStatementRenderer(source, sql, tqName, tqValue, varNames, varValues , SessionUtils.sessionId());
     List<InclusionRuleReport.Summary> result = getSourceJdbcTemplate(source).query(psr.getSql(), psr.getSetter(), summaryMapper);
     return result.isEmpty()? new InclusionRuleReport.Summary() : result.get(0);
   }
 
-  private List<InclusionRuleReport.InclusionRuleStatistic> getInclusionRuleStatistics(int id, Source source) {
+  private List<InclusionRuleReport.InclusionRuleStatistic> getInclusionRuleStatistics(int id, Source source, int modeId) {
 
     String sql = "select i.rule_sequence, i.name, s.person_count, s.gain_count, s.person_total"
         + " from @tableQualifier.cohort_inclusion i join @tableQualifier.cohort_inclusion_stats s on i.cohort_definition_id = s.cohort_definition_id"
         + " and i.rule_sequence = s.rule_sequence"
-        + " where i.cohort_definition_id = @id ORDER BY i.rule_sequence";
+        + " where i.cohort_definition_id = @id and mode_id = @modeId ORDER BY i.rule_sequence";
     String tqName = "tableQualifier";
     String tqValue = source.getTableQualifier(SourceDaimon.DaimonType.Results);
-    PreparedStatementRenderer psr = new PreparedStatementRenderer(source, sql, tqName, tqValue, "id", whitelist(id), SessionUtils.sessionId());
+		String[] varNames = {"id", "modeId"};
+		Object[] varValues = {whitelist(id), whitelist(modeId)};		
+    PreparedStatementRenderer psr = new PreparedStatementRenderer(source, sql, tqName, tqValue, varNames, varValues, SessionUtils.sessionId());
     return getSourceJdbcTemplate(source).query(psr.getSql(), psr.getSetter(), inclusionRuleStatisticMapper);
   }
   
@@ -208,12 +222,14 @@ public class CohortDefinitionService extends AbstractDaoService {
     return StringUtils.reverse(StringUtils.leftPad(Long.toBinaryString(n), size, "0"));
   }  
   
-  private String getInclusionRuleTreemapData(int id, int inclusionRuleCount, Source source) {
+  private String getInclusionRuleTreemapData(int id, int inclusionRuleCount, Source source, int modeId) {
 
-    String sql = "select inclusion_rule_mask, person_count from @tableQualifier.cohort_inclusion_result where cohort_definition_id = @id";
+    String sql = "select inclusion_rule_mask, person_count from @tableQualifier.cohort_inclusion_result where cohort_definition_id = @id and mode_id = @modeId";
     String tqName = "tableQualifier";
     String tqValue = source.getTableQualifier(SourceDaimon.DaimonType.Results);
-    PreparedStatementRenderer psr = new PreparedStatementRenderer(source, sql, tqName, tqValue, "id", id, SessionUtils.sessionId());
+		String[] varNames = {"id", "modeId"};
+		Object[] varValues = {whitelist(id), whitelist(modeId)};		
+    PreparedStatementRenderer psr = new PreparedStatementRenderer(source, sql, tqName, tqValue, varNames, varValues, SessionUtils.sessionId());
 
     // [0] is the inclusion rule bitmask, [1] is the count of the match
     List<Long[]> items = this.getSourceJdbcTemplate(source).query(psr.getSql(), psr.getSetter(), inclusionRuleResultItemMapper);
@@ -285,10 +301,10 @@ public class CohortDefinitionService extends AbstractDaoService {
     public String description;
     public ExpressionType expressionType;
     public String createdBy;
-    @JsonFormat(shape = JsonFormat.Shape.STRING, pattern = "yyyy-MM-dd, HH:mm")
+    @JsonFormat(shape = JsonFormat.Shape.STRING, pattern = "yyyy-MM-dd HH:mm")
     public Date createdDate;
     public String modifiedBy;
-    @JsonFormat(shape = JsonFormat.Shape.STRING, pattern = "yyyy-MM-dd, HH:mm")
+    @JsonFormat(shape = JsonFormat.Shape.STRING, pattern = "yyyy-MM-dd HH:mm")
     public Date modifiedDate;
   }
 
@@ -301,12 +317,12 @@ public class CohortDefinitionService extends AbstractDaoService {
     CohortDefinitionDTO result = new CohortDefinitionDTO();
 
     result.id = def.getId();
-    result.createdBy = def.getCreatedBy();
+    result.createdBy = UserUtils.nullSafeLogin(def.getCreatedBy());
     result.createdDate = def.getCreatedDate();
     result.description = def.getDescription();
     result.expressionType = def.getExpressionType();
     result.expression = def.getDetails() != null ? def.getDetails().getExpression() : null;
-    result.modifiedBy = def.getModifiedBy();
+    result.modifiedBy = UserUtils.nullSafeLogin(def.getModifiedBy());
     result.modifiedDate = def.getModifiedDate();
     result.name = def.getName();
 
@@ -342,21 +358,27 @@ public class CohortDefinitionService extends AbstractDaoService {
   @Path("/")
   @Produces(MediaType.APPLICATION_JSON)
   public List<CohortDefinitionListItem> getCohortDefinitionList() {
-    ArrayList<CohortDefinitionListItem> result = new ArrayList<>();
-    List<Object[]> defs = entityManager.createQuery("SELECT cd.id, cd.name, cd.description, cd.expressionType, cd.createdBy, cd.createdDate, cd.modifiedBy, cd.modifiedDate FROM CohortDefinition cd").getResultList();
-    for (Object[] d : defs) {
-      CohortDefinitionListItem item = new CohortDefinitionListItem();
-      item.id = (Integer)d[0];
-      item.name = (String)d[1];
-      item.description = (String)d[2];
-      item.expressionType = (ExpressionType)d[3];
-      item.createdBy = (String)d[4];
-      item.createdDate = (Date)d[5];
-      item.modifiedBy = (String)d[6];
-      item.modifiedDate = (Date)d[7];
-      result.add(item);
-    }
-    return result;
+
+		ArrayList<CohortDefinitionListItem> result = new ArrayList<>();
+		// we use a direct query here because using repository.findAll leads to N+1 query performance (because the One-To-One mapping to 
+		// CohortDefinitionDetails is not lazy loaded when using JPA to fetch data.
+		String query = "SELECT cd.id, cd.name, cd.description, cd.expressionType, cu.login, cd.createdDate, mu.login, cd.modifiedDate FROM CohortDefinition cd"
+						+	" LEFT JOIN cd.createdBy cu LEFT JOIN cd.modifiedBy mu";
+		
+		List<Object[]> defs = entityManager.createQuery(query).getResultList();
+		for (Object[] d : defs) {
+			CohortDefinitionListItem item = new CohortDefinitionListItem();
+			item.id = (Integer)d[0];
+			item.name = (String)d[1];
+			item.description = (String)d[2];
+			item.expressionType = (ExpressionType)d[3];
+			item.createdBy = (String)d[4];
+			item.createdDate = (Date)d[5];
+			item.modifiedBy = (String)d[6];
+			item.modifiedDate = (Date)d[7];
+			result.add(item);
+		}
+		return result;
   }
 
   /**
@@ -370,29 +392,33 @@ public class CohortDefinitionService extends AbstractDaoService {
   @Produces(MediaType.APPLICATION_JSON)
   @Consumes(MediaType.APPLICATION_JSON)
   public CohortDefinitionDTO createCohortDefinition(CohortDefinitionDTO def) {
-    Date currentTime = Calendar.getInstance().getTime();
 
-    //create definition in 2 saves, first to get the generated ID for the new def
-    // then to associate the details with the definition
-    CohortDefinition newDef = new CohortDefinition();
-    newDef.setName(def.name)
-            .setDescription(def.description)
-            .setCreatedBy(security.getSubject())
-            .setCreatedDate(currentTime)
-            .setExpressionType(def.expressionType);
+    return getTransactionTemplate().execute(transactionStatus -> {
+      Date currentTime = Calendar.getInstance().getTime();
 
-    newDef = this.cohortDefinitionRepository.save(newDef);
+      UserEntity user = userRepository.findByLogin(security.getSubject());
+      //create definition in 2 saves, first to get the generated ID for the new def
+      // then to associate the details with the definition
+      CohortDefinition newDef = new CohortDefinition();
+      newDef.setName(def.name)
+              .setDescription(def.description)
+              .setExpressionType(def.expressionType);
+      newDef.setCreatedBy(user);
+      newDef.setCreatedDate(currentTime);
 
-    // associate details
-    CohortDefinitionDetails details = new CohortDefinitionDetails();
-    details.setCohortDefinition(newDef)
-            .setExpression(def.expression);
+      newDef = this.cohortDefinitionRepository.save(newDef);
 
-    newDef.setDetails(details);
+      // associate details
+      CohortDefinitionDetails details = new CohortDefinitionDetails();
+      details.setCohortDefinition(newDef)
+              .setExpression(def.expression);
 
-    CohortDefinition createdDefinition = this.cohortDefinitionRepository.save(newDef);
+      newDef.setDetails(details);
 
-    return cohortDefinitionToDTO(createdDefinition);
+      CohortDefinition createdDefinition = this.cohortDefinitionRepository.save(newDef);
+
+      return cohortDefinitionToDTO(createdDefinition);
+    });
   }
 
   /**
@@ -405,8 +431,11 @@ public class CohortDefinitionService extends AbstractDaoService {
   @Path("/{id}")
   @Produces(MediaType.APPLICATION_JSON)
   public CohortDefinitionDTO getCohortDefinition(@PathParam("id") final int id) {
-    CohortDefinition d = this.cohortDefinitionRepository.findOneWithDetail(id);
-    return cohortDefinitionToDTO(d);
+
+    return getTransactionTemplate().execute(transactionStatus -> {
+      CohortDefinition d = this.cohortDefinitionRepository.findOneWithDetail(id);
+      return cohortDefinitionToDTO(d);
+    });
   }
 
   /**
@@ -423,13 +452,14 @@ public class CohortDefinitionService extends AbstractDaoService {
     Date currentTime = Calendar.getInstance().getTime();
 
     CohortDefinition currentDefinition = this.cohortDefinitionRepository.findOneWithDetail(id);
+    UserEntity modifier = userRepository.findByLogin(security.getSubject());
 
     currentDefinition.setName(def.name)
             .setDescription(def.description)
             .setExpressionType(def.expressionType)
-            .setModifiedBy(security.getSubject())
-            .setModifiedDate(currentTime)
             .getDetails().setExpression(def.expression);
+    currentDefinition.setModifiedBy(modifier);
+    currentDefinition.setModifiedDate(currentTime);
 
     this.cohortDefinitionRepository.save(currentDefinition);
     return getCohortDefinition(id);
@@ -444,73 +474,42 @@ public class CohortDefinitionService extends AbstractDaoService {
   @GET
   @Produces(MediaType.APPLICATION_JSON)
   @Path("/{id}/generate/{sourceKey}")
+  @Transactional
   public JobExecutionResource generateCohort(@PathParam("id") final int id, @PathParam("sourceKey") final String sourceKey, @QueryParam("includeFeatures") final String includeFeatures) {
 
     Source source = getSourceRepository().findBySourceKey(sourceKey);
-    String cdmTableQualifier = source.getTableQualifier(SourceDaimon.DaimonType.CDM);    
-    String resultsTableQualifier = source.getTableQualifier(SourceDaimon.DaimonType.Results);    
-    String vocabularyTableQualifier = source.getTableQualifierOrNull(SourceDaimon.DaimonType.Vocabulary);
-		
-    DefaultTransactionDefinition requresNewTx = new DefaultTransactionDefinition();
-    requresNewTx.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
-    TransactionStatus initStatus = this.getTransactionTemplate().getTransactionManager().getTransaction(requresNewTx);
-
     CohortDefinition currentDefinition = this.cohortDefinitionRepository.findOne(id);
-    CohortGenerationInfo info = findBySourceId(currentDefinition.getGenerationInfoList(), source.getSourceId());
-    if (info == null) {
-      info = new CohortGenerationInfo(currentDefinition, source.getSourceId());
-      currentDefinition.getGenerationInfoList().add(info);
-    }
-    info.setStatus(GenerationStatus.PENDING)
-      .setStartTime(Calendar.getInstance().getTime());
 
-		info.setIncludeFeatures(includeFeatures != null);
-		
-    this.cohortDefinitionRepository.save(currentDefinition);
-    this.getTransactionTemplate().getTransactionManager().commit(initStatus);
+    return cohortGenerationService.generateCohort(currentDefinition, source, Objects.nonNull(includeFeatures));
+  }
 
-    JobParametersBuilder builder = new JobParametersBuilder();
-    builder.addString("jobName", "generating cohort " + currentDefinition.getId() + " : " + source.getSourceName() + " (" + source.getSourceKey() + ")");
-    builder.addString("cdm_database_schema", cdmTableQualifier);
-    builder.addString("results_database_schema", resultsTableQualifier);
-    builder.addString("target_database_schema", resultsTableQualifier);
-		if (vocabularyTableQualifier != null)
-			builder.addString("vocabulary_database_schema", vocabularyTableQualifier);
-    builder.addString("target_dialect", source.getSourceDialect());
-    builder.addString("target_table", "cohort");
-    builder.addString("cohort_definition_id", ("" + id));
-    builder.addString("source_id", ("" + source.getSourceId()));
-    builder.addString("generate_stats", Boolean.TRUE.toString());
+  @GET
+  @Produces(MediaType.APPLICATION_JSON)
+  @Path("/{id}/cancel/{sourceKey}")
+  public Response cancelGenerateCohort(@PathParam("id") final int id, @PathParam("sourceKey") final String sourceKey) {
 
-    final JobParameters jobParameters = builder.toJobParameters();
+    final Source source = Optional.ofNullable(getSourceRepository().findBySourceKey(sourceKey))
+            .orElseThrow(NotFoundException::new);
+    getTransactionTemplateRequiresNew().execute(status -> {
+      CohortDefinition currentDefinition = cohortDefinitionRepository.findOne(id);
+      if (Objects.nonNull(currentDefinition)) {
+        CohortGenerationInfo info = findBySourceId(currentDefinition.getGenerationInfoList(), source.getSourceId());
+        if (Objects.nonNull(info)) {
+          invalidateExecution(info);
+          cohortDefinitionRepository.save(currentDefinition);
+        }
+      }
+      return null;
+    });
 
-    log.info(String.format("Beginning generate cohort for cohort definition id: \n %s", "" + id));
-
-    GenerateCohortTasklet generateTasklet = new GenerateCohortTasklet(getSourceJdbcTemplate(source), getTransactionTemplate(), cohortDefinitionRepository);
-
-    Step generateCohortStep = stepBuilders.get("cohortDefinition.generateCohort")
-      .tasklet(generateTasklet)
-    .build();
-
-		SimpleJobBuilder generateJobBuilder = jobBuilders.get("generateCohort")
-			.listener(new GenerationJobExecutionListener(cohortDefinitionRepository, this.getTransactionTemplateRequiresNew(), this.getSourceJdbcTemplate(source)))
-			.start(generateCohortStep);
-
-		if (includeFeatures != null) {
-			GenerateCohortFeaturesTasklet generateCohortFeaturesTasklet = 
-						new GenerateCohortFeaturesTasklet(getSourceJdbcTemplate(source), getTransactionTemplate());
-
-			Step generateCohortFeaturesStep = stepBuilders.get("cohortFeatures.generateFeatures")
-					.tasklet(generateCohortFeaturesTasklet)
-					.build();
-	
-			generateJobBuilder.next(generateCohortFeaturesStep);			
-		}
-		
-		Job generateCohortJob = generateJobBuilder.build();
-
-    JobExecutionResource jobExec = this.jobTemplate.launch(generateCohortJob, jobParameters);
-    return jobExec;
+    cohortGenerationService.getJobExecution(source, id)
+            .ifPresent(job -> {
+              try {
+                jobOperator.stop(job.getJobId());
+              } catch (NoSuchJobExecutionException | JobExecutionNotRunningException ignored) {
+              }
+            });
+    return Response.status(Response.Status.OK).build();
   }
 
   /**
@@ -574,8 +573,8 @@ public class CohortDefinitionService extends AbstractDaoService {
 		});
 
 		JobParametersBuilder builder = new JobParametersBuilder();
-		builder.addString("jobName", String.format("Cleanup cohort %d.",id));
-		builder.addString("cohort_definition_id", ("" + id));
+		builder.addString(JOB_NAME, String.format("Cleanup cohort %d.",id));
+		builder.addString(COHORT_DEFINITION_ID, ("" + id));
 
 		final JobParameters jobParameters = builder.toJobParameters();
 
@@ -650,13 +649,16 @@ public class CohortDefinitionService extends AbstractDaoService {
   @Path("/{id}/report/{sourceKey}")
   @Produces(MediaType.APPLICATION_JSON)
   @Transactional
-  public InclusionRuleReport getInclusionRuleReport(@PathParam("id") final int id, @PathParam("sourceKey") final String sourceKey) {
+  public InclusionRuleReport getInclusionRuleReport(
+					@PathParam("id") final int id, 
+					@PathParam("sourceKey") final String sourceKey, 
+					@DefaultValue("0") @QueryParam("mode") int modeId) {
 
     Source source = this.getSourceRepository().findBySourceKey(sourceKey);
 
-    InclusionRuleReport.Summary summary = getInclusionRuleReportSummary(whitelist(id), source);
-    List<InclusionRuleReport.InclusionRuleStatistic> inclusionRuleStats = getInclusionRuleStatistics(whitelist(id), source);
-    String treemapData = getInclusionRuleTreemapData(whitelist(id), inclusionRuleStats.size(), source);
+    InclusionRuleReport.Summary summary = getInclusionRuleReportSummary(whitelist(id), source, modeId);
+    List<InclusionRuleReport.InclusionRuleStatistic> inclusionRuleStats = getInclusionRuleStatistics(whitelist(id), source, modeId);
+    String treemapData = getInclusionRuleTreemapData(whitelist(id), inclusionRuleStats.size(), source, modeId);
 
     InclusionRuleReport report = new InclusionRuleReport();
     report.summary = summary;
@@ -664,5 +666,74 @@ public class CohortDefinitionService extends AbstractDaoService {
     report.treemapData = treemapData;
 
     return report;
-  }  
+  }
+
+  private CheckResultDTO runChecks(int id, final String expression) {
+      CheckResultDTO result;
+      ObjectMapper mapper = new ObjectMapper();
+      try {
+          CohortExpression cohortExpression = mapper.readValue(expression, CohortExpression.class);
+          result = runChecks(id, cohortExpression);
+      } catch (IOException e) {
+          log.error(String.format("Failed to parse cohort:%d expression", id), e);
+          result = new CheckResultDTO(id, Stream.of(new DefaultWarning(WarningSeverity.INFO,"Failed to check expression"))
+                  .collect(Collectors.toList()));
+      }
+      return result;
+  }
+
+  private CheckResultDTO runChecks(int id, CohortExpression expression) {
+      Checker checker = new Checker();
+      return new CheckResultDTO(id, checker.check(expression));
+  }
+
+  @GET
+  @Path("/{id}/check")
+  @Produces(MediaType.APPLICATION_JSON)
+  @Transactional
+  public CheckResultDTO getCheckResults(@PathParam("id") int id) {
+    CohortDefinition cohortDefinition = cohortDefinitionRepository.findOneWithDetail(id);
+    String expression = cohortDefinition.getDetails().getExpression();
+    return runChecks(id, expression);
+  }
+
+  @POST
+  @Path("/{id}/check")
+  @Produces(MediaType.APPLICATION_JSON)
+  @Consumes(MediaType.APPLICATION_JSON)
+  @Transactional
+  public CheckResultDTO runDiagnostics(@PathParam("id") int id,  CohortExpression expression){
+      return runChecks(id, expression);
+  }
+
+  public static class CheckResultDTO{
+    private Integer cohortDefinitionId;
+    private List<Warning> warnings;
+
+    public CheckResultDTO(Integer cohortDefinitionId, List<Warning> warnings) {
+
+      this.cohortDefinitionId = cohortDefinitionId;
+      this.warnings = warnings;
+    }
+
+    public Integer getCohortDefinitionId() {
+
+      return cohortDefinitionId;
+    }
+
+    public void setCohortDefinitionId(Integer cohortDefinitionId) {
+
+      this.cohortDefinitionId = cohortDefinitionId;
+    }
+
+    public List<Warning> getWarnings() {
+
+      return warnings;
+    }
+
+    public void setWarnings(List<Warning> warnings) {
+
+      this.warnings = warnings;
+    }
+  }
 }
