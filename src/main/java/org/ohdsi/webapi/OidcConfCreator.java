@@ -19,6 +19,7 @@
 package org.ohdsi.webapi;
 
 import com.nimbusds.jose.JWSAlgorithm;
+import com.nimbusds.oauth2.sdk.auth.ClientAuthenticationMethod;
 import org.pac4j.oidc.config.OidcConfiguration;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
@@ -36,6 +37,9 @@ public class OidcConfCreator {
     @Value("${security.oid.url}")
     private String url;
 
+    @Value("${security.oid.authMethod}")
+    private String authMethod;
+
     @Value("${security.oauth.callback.api}")
     private String oauthApiCallback;
 
@@ -46,6 +50,7 @@ public class OidcConfCreator {
         conf.setDiscoveryURI(url);
         conf.setCallbackUrl(oauthApiCallback);
         conf.setPreferredJwsAlgorithm(JWSAlgorithm.RS256);
+        conf.setClientAuthenticationMethod(ClientAuthenticationMethod.parse(authMethod));
         return conf;
     }
 
