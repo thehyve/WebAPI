@@ -43,6 +43,9 @@ public class OidcConfCreator {
     @Value("${security.oauth.callback.api}")
     private String oauthApiCallback;
 
+    @Value("${security.oid.logoutUrl}")
+    private String logoutUrl;
+
     public OidcConfiguration build() {
         OidcConfiguration conf = new OidcConfiguration();
         conf.setClientId(clientId);
@@ -51,6 +54,7 @@ public class OidcConfCreator {
         conf.setCallbackUrl(oauthApiCallback);
         conf.setPreferredJwsAlgorithm(JWSAlgorithm.RS256);
         conf.setClientAuthenticationMethod(ClientAuthenticationMethod.parse(authMethod));
+        conf.setLogoutUrl(logoutUrl);
         return conf;
     }
 
