@@ -175,6 +175,7 @@
     <server.ssl.key-store></server.ssl.key-store>
     <server.ssl.key-store-password></server.ssl.key-store-password>
     <server.ssl.key-password></server.ssl.key-password>
+    <server.servlet.context-path>/WebAPI</server.servlet.context-path>
 
     <arachne.version>1.16.0-SNAPSHOT</arachne.version>
     <jersey-media-multipart.version>2.25.1</jersey-media-multipart.version>
@@ -227,8 +228,8 @@
     <!-- Cache Config -->
     <spring.cache.jcache.config>classpath:config/ehcache.xml</spring.cache.jcache.config>
     <cdm.result.cache.warming.enable>true</cdm.result.cache.warming.enable>
-    <cache.generation.invalidAfterDays>7</cache.generation.invalidAfterDays>
-    <cache.generation.cleanupInterval>60000</cache.generation.cleanupInterval>
+    <cache.generation.invalidAfterDays>30</cache.generation.invalidAfterDays>
+    <cache.generation.cleanupInterval>3600000</cache.generation.cleanupInterval>
     <cache.generation.useAsync>false</cache.generation.useAsync>
     <!-- Period in milliseconds between running checks to detect freshness of cached data -->
     <cache.inspection.period>3600000</cache.inspection.period>
@@ -318,6 +319,7 @@
         <configuration>
           <!-- Since we filter properties files via Maven, do not add resources. -->
           <addResources>false</addResources>
+          <mainClass>org.ohdsi.webapi.WebApi</mainClass>
           <additionalProperties>
             <git.branch>${git.branch}</git.branch>
             <git.commit.id>${git.commit.id.abbrev}</git.commit.id>
@@ -331,6 +333,7 @@
           <execution>
             <goals>
               <goal>build-info</goal>
+              <goal>repackage</goal>
             </goals>
           </execution>
         </executions>
