@@ -6,7 +6,7 @@ on:
     types: [published]
 
 env:
-  DOCKER_IMAGE: thehyve/ohdsi-atlas
+  DOCKER_IMAGE: thehyve/ohdsi-webapi
 
 jobs:
   upload:
