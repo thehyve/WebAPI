@@ -99,6 +99,7 @@ jobs:
             maintainer=Joris Borgdorff <joris@thehyve.nl>, Lee Evans - www.ltscomputingllc.com
             org.opencontainers.image.authors=Joris Borgdorff <joris@thehyve.nl>, Lee Evans - www.ltscomputingllc.com
             org.opencontainers.image.vendor=OHDSI
+            org.opencontainers.image.licenses=Apache-2.0
 
       - name: Inspect image
         run: |
